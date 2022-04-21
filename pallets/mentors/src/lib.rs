@@ -28,6 +28,7 @@ pub mod pallet {
 	use frame_system::pallet_prelude::*;
 	
 	use frame_support::dispatch::Vec;
+	use frame_support::transactional;
 	use frame_system::{
         offchain::{
             SubmitTransaction,
@@ -56,13 +57,15 @@ pub mod pallet {
 
 		#[pallet::constant]
 		type UnsignedPriority: Get<TransactionPriority>;
+
+		#[pallet::constant]
+		type CancellationPeriod: Get<Self::Moment>;
 	}
 
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(_);
 
-	pub type CancellationPeriod<T: Config> = T::Moment;
 	pub type Availabilities<T: Config> = BoundedVec<T::Moment, T::MaxLength>;
 
 	// The storage item with the new Mentors. The offchain worker removes them every block.
@@ -70,8 +73,8 @@ pub mod pallet {
 	#[pallet::getter(fn new_mentors)]
 	pub(super) type NewMentors<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, bool, ValueQuery>;
 	
-	// The storage item mapping the mentor AccountId to a boolean value, true if credentials have been verified.
-	// Currently a Mentor can verify credentials by submitting a correct response to the provided challenge. 
+	// The storage item mapping the mentor AccountId to a Status enum, Verified if credentials have been verified.
+	// Currently a mentor can verify credentials by submitting a correct response to the provided challenge. 
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_credentials)]
 	pub(super) type MentorCredentials<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, Status, ValueQuery>;
@@ -81,6 +84,19 @@ pub mod pallet {
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_availabilities)]
 	pub(super) type MentorAvailabilities<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, Availabilities<T>, ValueQuery>;
+
+	// The storage item mapping the mentor AccountId to a student AccountId to the booked timeslot.
+	// Currently it's possible to book only one session upfront. 
+	#[pallet::storage]
+	pub(super) type UpcomingSessions<T: Config> = StorageDoubleMap<
+		_, 
+		Blake2_128Concat, 
+		T::AccountId, 
+		Blake2_128Concat, 
+		T::AccountId, 
+		T::Moment, 
+		ValueQuery
+	>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -95,8 +111,12 @@ pub mod pallet {
 
 	#[pallet::error]
 	pub enum Error<T> {
-		/// If a Mentor is already in the MentorCredentials storage, they cannot register again.
+		/// If a mentor is already in the MentorCredentials storage, they cannot register again.
 		MentorAlreadyRegistered,
+		/// If a student cancels less than 24 hours in advance.
+		CancellationNotPossible,
+		/// If a student tries to book a timeslot that is not available.
+		TimeslotNotAvailable,
 	}
 
 	#[pallet::hooks]
@@ -123,6 +143,7 @@ pub mod pallet {
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
+
 		/// Allows a new mentor to initiate the registration process. 
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn register_as_mentor(origin: OriginFor<T>) -> DispatchResult {
@@ -137,43 +158,70 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn add_availability(origin: OriginFor<T>, timeslot: T::Moment) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-			let current_availabilities = <MentorAvailabilities<T>>::get(&who);
-			if current_availabilities.contains(&timeslot) {
-				let updated_availabilities = current_availabilities.push(timeslot);
-				<MentorAvailabilities<T>>::insert(&who, updated_availabilities)
+			let now = <timestamp::Pallet<T>>::get();
+			let mut current_availabilities = <MentorAvailabilities<T>>::get(&who);
+			if !current_availabilities.contains(&(now + timeslot)) {
+				current_availabilities.try_push(now + timeslot);
+				<MentorAvailabilities<T>>::insert(&who, current_availabilities)
 			} else {}
 			Ok(())
 		}
 
 		/// Allows a mentor to remove an open timeslot.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn remove_availability(origin: OriginFor<T>) -> DispatchResult {
+		pub fn remove_availability(origin: OriginFor<T>, timestamp: T::Moment) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-			Ok(())
+			let mut current_availabilities = <MentorAvailabilities<T>>::get(&who);
+			let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
+			<MentorAvailabilities<T>>::try_mutate(&who, |current_availabilities| {
+				current_availabilities.remove(index);
+				Ok(())
+			})
 		}
 
 		/// Allows a student to book a session with a mentor.
+		#[transactional]
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn book_session(origin: OriginFor<T>) -> DispatchResult {
+		pub fn book_session(origin: OriginFor<T>, mentor: T::AccountId, timestamp: T::Moment) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-			Ok(())
+			let mut current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
+			if current_availabilities.contains(&timestamp) {
+				<UpcomingSessions<T>>::insert(&mentor, &who, timestamp);
+				let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
+				<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
+					current_availabilities.remove(index);
+					Ok(())
+				})
+			} else { 
+				Err(Error::<T>::TimeslotNotAvailable)? 
+			}
 		}
 
 		/// Allows a mentor to reject a session. 
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn reject_session(origin: OriginFor<T>) -> DispatchResult {
+		pub fn reject_session(origin: OriginFor<T>, student: T::AccountId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
+			<UpcomingSessions<T>>::remove(&who, &student);
 			Ok(())
 		}
 
 		/// Allows a student to cancel a session 24 hours in advance. 
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn cancel_session(origin: OriginFor<T>) -> DispatchResult {
+		pub fn cancel_session(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-			Ok(())
+			let upcoming_timestamp = <UpcomingSessions<T>>::get(&mentor, &who);
+			let now = <timestamp::Pallet<T>>::get();
+			let cancellation_period = T::CancellationPeriod::get();
+			if upcoming_timestamp - now > cancellation_period {
+				<UpcomingSessions<T>>::remove(&mentor, &who);
+				Ok(())
+			} else {
+				Err(Error::<T>::CancellationNotPossible)?
+			}
 		}
 
-
+		/// The offchain worker uses this dispatchable to remove viewed mentors from storage,
+		/// and to send them a challenge for verification. Sets Status to ChallengeSent. 
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(2))]
 		pub fn process_new_mentor(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
 			let who = ensure_none(origin)?;
