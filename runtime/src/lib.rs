@@ -31,7 +31,7 @@ pub use frame_support::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
 		IdentityFee, Weight,
 	},
-	StorageValue,
+	StorageValue, PalletId,
 };
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
@@ -268,6 +268,7 @@ impl pallet_sudo::Config for Runtime {
 parameter_types! {
 	pub const MaxAvailabilityLength: u32 = 32;
 	pub const UnsignedPriority: u64 = 1 << 20;
+	pub const VaultPalletId: PalletId = PalletId(*b"mentors ");
 }
 
 impl pallet_mentors::Config for Runtime {
@@ -276,6 +277,9 @@ impl pallet_mentors::Config for Runtime {
 	type Call = Call;
 	type UnsignedPriority = UnsignedPriority;
 	type CancellationPeriod = ConstU64<{ 24*60*60*1000 }>;
+	type Currency = Balances;
+	type PalletId = VaultPalletId;
+	type Balance = Balance;
 }
 
 impl<C> frame_system::offchain::SendTransactionTypes<C> for Runtime
