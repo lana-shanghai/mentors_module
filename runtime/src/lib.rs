@@ -279,7 +279,6 @@ impl pallet_mentors::Config for Runtime {
 	type CancellationPeriod = ConstU64<{ 24*60*60*1000 }>;
 	type Currency = Balances;
 	type PalletId = VaultPalletId;
-	type Balance = Balance;
 }
 
 impl<C> frame_system::offchain::SendTransactionTypes<C> for Runtime

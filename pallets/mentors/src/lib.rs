@@ -31,6 +31,7 @@ pub mod pallet {
 			Currency,
 			tokens::ExistenceRequirement,
 		},
+		sp_runtime::traits::AccountIdConversion,
 		transactional,
 		PalletId,
 	};
@@ -40,7 +41,6 @@ pub mod pallet {
             SendTransactionTypes,
         },
 	};
-	use frame_support::sp_runtime::traits::AccountIdConversion;
 
 	use vault_primitives::vault_manager::{Vault, VaultDetails};
 
@@ -65,15 +65,6 @@ pub mod pallet {
 		type Call: From<Call<Self>> + Into<<Self as frame_system::Config>::Call>;
 
 		type Currency: Currency<Self::AccountId>;
-
-		type Balance: Default
-			+ Parameter
-			+ Encode
-			+ Decode
-			+ MaxEncodedLen
-			+ Copy
-			+ Ord
-			+ From<u32>;
 		
 		#[pallet::constant]
 		type MaxLength: Get<u32>;
@@ -131,8 +122,8 @@ pub mod pallet {
 		ValueQuery
 	>;
 
-	// The storage item mapping the mentor AccountId to a student AccountId to the vault id.
-	// The vault id increments by one for each new session and corresponding vault. 
+	/// The storage item mapping the mentor AccountId to a student AccountId to the vault id.
+	/// The vault id increments by one for each new session and corresponding vault. 
 	#[pallet::storage]
 	#[pallet::getter(fn past_sessions)]
 	pub(super) type PastSessions<T: Config> = StorageDoubleMap<
@@ -141,7 +132,7 @@ pub mod pallet {
 		T::AccountId, 
 		Blake2_128Concat, 
 		T::AccountId, 
-		BalanceOf<T>, 
+		u64, 
 		ValueQuery
 	>;
 
@@ -150,8 +141,7 @@ pub mod pallet {
 	#[pallet::getter(fn vault_count)]
 	pub type VaultTracker<T: Config> = StorageValue<_, u64, ValueQuery>;
 
-	// The storage item mapping the mentor AccountId to a student AccountId to the booked timeslot.
-	// Currently it's possible to book only one session upfront. 
+	/// The storage item mapping the mentor AccountId to a student AccountId to the corresponding vault.
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_student_vaults)]
 	pub(super) type MentorStudentVaults<T: Config> = StorageDoubleMap<
@@ -187,10 +177,13 @@ pub mod pallet {
 		MentorAlreadyRegistered,
 		/// Emitted if a student cancels less than 24 hours in advance.
 		CancellationNotPossible,
-		/// Emitted if a student tries to book a timeslot that is not available.
+		/// Emitted when a student tries to book a timeslot that is not available.
 		TimeslotNotAvailable,
-		/// Emitted when
+		/// Emitted when a student tries to book a timeslot that is in the future.
+		BookingMustBeinTheFuture,
+		/// Emitted when a withdrawal does not fulfill necessary requirements.
 		WithdrawalNotPermitted,
+		
 	}
 
 	#[pallet::hooks]
@@ -244,7 +237,10 @@ pub mod pallet {
 			let now = <timestamp::Pallet<T>>::get();
 			let mut current_availabilities = <MentorAvailabilities<T>>::get(&who);
 			if !current_availabilities.contains(&(now + timeslot)) {
-				current_availabilities.try_push(now + timeslot);
+				match current_availabilities.try_push(now + timeslot) {
+					Err(e) => log::info!("{:?}", e),
+   				 	_ => ()
+				};
 				<MentorAvailabilities<T>>::insert(&who, current_availabilities)
 			} else {}
 			Ok(())
@@ -267,11 +263,16 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn book_session(origin: OriginFor<T>, mentor: T::AccountId, timestamp: T::Moment) -> DispatchResult {
 			let who = ensure_signed(origin)?;
+			let now = <timestamp::Pallet<T>>::get();
+			ensure!(timestamp > now, Error::<T>::BookingMustBeinTheFuture);
 			let current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			if current_availabilities.contains(&timestamp) {
 				<UpcomingSessions<T>>::insert(&mentor, &who, timestamp);
 				let _new_vault = Self::new_vault(mentor.clone(), who.clone()).map(|(vault_id, _)| vault_id);
-				Self::make_deposit(&mentor, &who);
+				match Self::make_deposit(&mentor, &who) {
+					Err(e) => log::info!("{:?}", e),
+   				 	_ => ()
+				};
 				let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
 				<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
 					current_availabilities.remove(index);
@@ -346,11 +347,13 @@ pub mod pallet {
 			let call: Call<T> = Call::process_new_mentor{ mentor: mentor };
             match SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into()) {
 				Err(e) => log::info!("{:?}", e),
-   				 _ => ()
+   				_ => ()
 			};
 		}
 
-		pub fn new_vault(mentor: T::AccountId, student: T::AccountId) -> Result<(u64, VaultDetails<T::AccountId, BalanceOf<T>>), DispatchError> {
+		pub fn new_vault(mentor: T::AccountId, student: T::AccountId) -> 
+			Result<(u64, VaultDetails<T::AccountId, BalanceOf<T>>), DispatchError> {
+			
 			<VaultTracker<T>>::try_mutate(|id| {
 				let new_vault_id = {
 					*id += 1;
@@ -367,19 +370,24 @@ pub mod pallet {
 			})	
 		}
 
-		pub fn make_deposit(mentor: &T::AccountId, student: &T::AccountId) -> Result<BalanceOf<T>, DispatchError> {
+		pub fn make_deposit(mentor: &T::AccountId, student: &T::AccountId) -> 
+			Result<BalanceOf<T>, DispatchError> {
+			
 			let vault_id = <VaultTracker<T>>::get();
 
 			let vault_address = <Self as Vault>::account_id(vault_id);
 			log::info!("VAULT ADDRESS: {:?}", vault_address);
 			let price = <MentorPricing<T>>::get(&mentor).unwrap();
 
-			T::Currency::transfer(
+			match T::Currency::transfer(
 				student,
 				&vault_address,
 				price,
 				ExistenceRequirement::KeepAlive,
-			);
+			) {
+				Err(e) => log::info!("{:?}", e),
+   				_ => ()
+			};
 			Ok(price)
 		}
 
