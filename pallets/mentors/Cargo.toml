@@ -23,6 +23,7 @@ sp-core = { default-features = false, version = "6.0.0", git = "https://github.c
 sp-io = { default-features = false, version = "6.0.0", git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.18" }
 sp-runtime = { default-features = false, version = "6.0.0", git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.18" }
 pallet-timestamp = { version = "4.0.0-dev", default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.18" }
+pallet-balances = { version = "4.0.0-dev", default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.18" }
 vault-primitives = { version = "4.0.0-dev", default-features = false, path = "../../primitives/" }
 
 [features]
@@ -34,6 +35,7 @@ std = [
 	"frame-system/std",
 	"frame-benchmarking/std",
 	"pallet-timestamp/std",
+	"pallet-balances/std",
 ]
 
 runtime-benchmarks = ["frame-benchmarking/runtime-benchmarks"]
