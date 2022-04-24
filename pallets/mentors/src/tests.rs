@@ -7,4 +7,3 @@ fn new_mentor_can_register() {
 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(1u64).into()));
 	});
 }
-

@@ -26,12 +26,14 @@ use sp_version::RuntimeVersion;
 // A few exports that help ease life for downstream crates.
 pub use frame_support::{
 	construct_runtime, parameter_types,
-	traits::{ConstU128, ConstU32, ConstU8, ConstU64, KeyOwnerProofSystem, Randomness, StorageInfo},
+	traits::{
+		ConstU128, ConstU32, ConstU64, ConstU8, KeyOwnerProofSystem, Randomness, StorageInfo,
+	},
 	weights::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
 		IdentityFee, Weight,
 	},
-	StorageValue, PalletId,
+	PalletId, StorageValue,
 };
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
@@ -276,7 +278,7 @@ impl pallet_mentors::Config for Runtime {
 	type MaxLength = MaxAvailabilityLength;
 	type Call = Call;
 	type UnsignedPriority = UnsignedPriority;
-	type CancellationPeriod = ConstU64<{ 24*60*60*1000 }>;
+	type CancellationPeriod = ConstU64<{ 24 * 60 * 60 * 1000 }>;
 	type Currency = Balances;
 	type PalletId = VaultPalletId;
 }

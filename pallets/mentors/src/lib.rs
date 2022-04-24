@@ -1,4 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(unused_variables)]
+#![allow(type_alias_bounds)]
 
 pub use pallet::*;
 
@@ -17,30 +19,20 @@ use frame_support::sp_runtime::transaction_validity::{
 
 use pallet_timestamp::{self as timestamp};
 
-
 #[frame_support::pallet]
 pub mod pallet {
 	use super::*;
-	
+
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
-	
+
 	use frame_support::{
-		dispatch::{Vec, DispatchError, DispatchResult,},
-		traits::{
-			Currency,
-			tokens::ExistenceRequirement,
-		},
+		dispatch::{DispatchError, DispatchResult, Vec},
 		sp_runtime::traits::AccountIdConversion,
-		transactional,
-		PalletId,
+		traits::{tokens::ExistenceRequirement, Currency},
+		transactional, PalletId,
 	};
-	use frame_system::{
-        offchain::{
-            SubmitTransaction,
-            SendTransactionTypes,
-        },
-	};
+	use frame_system::offchain::{SendTransactionTypes, SubmitTransaction};
 
 	use vault_primitives::vault_manager::{Vault, VaultDetails};
 
@@ -57,15 +49,17 @@ pub mod pallet {
 	}
 
 	#[pallet::config]
-	pub trait Config: frame_system::Config + timestamp::Config + SendTransactionTypes<Call<Self>> {
-		type Event: From<Event<Self>> 
+	pub trait Config:
+		frame_system::Config + timestamp::Config + SendTransactionTypes<Call<Self>>
+	{
+		type Event: From<Event<Self>>
 			+ IsType<<Self as frame_system::Config>::Event>
 			+ Into<<Self as frame_system::Config>::Event>;
 
 		type Call: From<Call<Self>> + Into<<Self as frame_system::Config>::Call>;
 
 		type Currency: Currency<Self::AccountId>;
-		
+
 		#[pallet::constant]
 		type MaxLength: Get<u32>;
 
@@ -83,57 +77,62 @@ pub mod pallet {
 	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(_);
 
-	
-
 	// The storage item with the new Mentors. The offchain worker removes them every block.
 	#[pallet::storage]
 	#[pallet::getter(fn new_mentors)]
-	pub(super) type NewMentors<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, bool, ValueQuery>;
-	
-	// The storage item mapping the mentor AccountId to a Status enum, Verified if credentials have been verified.
-	// Currently a mentor can verify credentials by submitting a correct response to the provided challenge. 
+	pub(super) type NewMentors<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, bool, ValueQuery>;
+
+	// The storage item mapping the mentor AccountId to a Status enum, Verified if credentials have
+	// been verified. Currently a mentor can verify credentials by submitting a correct response to
+	// the provided challenge.
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_credentials)]
-	pub(super) type MentorCredentials<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, Status, ValueQuery>;
+	pub(super) type MentorCredentials<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, Status, ValueQuery>;
 
 	// The storage item mapping the mentor AccountId to a vector of timeslot availabilities.
-	// Currently the timeslot lengths are all taken equal to X. A mentor can provide up to 32 availabilities. 
+	// Currently the timeslot lengths are all taken equal to X. A mentor can provide up to 32
+	// availabilities.
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_availabilities)]
-	pub(super) type MentorAvailabilities<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, Availabilities<T>, ValueQuery>;
+	pub(super) type MentorAvailabilities<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, Availabilities<T>, ValueQuery>;
 
 	// The storage item mapping the mentor AccountId to a vector of timeslot availabilities.
-	// Currently the timeslot lengths are all taken equal to X. A mentor can provide up to 32 availabilities. 
+	// Currently the timeslot lengths are all taken equal to X. A mentor can provide up to 32
+	// availabilities.
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_pricing)]
-	pub(super) type MentorPricing<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, BalanceOf<T>, OptionQuery>;
+	pub(super) type MentorPricing<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, BalanceOf<T>, OptionQuery>;
 
 	// The storage item mapping the mentor AccountId to a student AccountId to the booked timeslot.
-	// Currently it's possible to book only one session upfront. 
+	// Currently it's possible to book only one session upfront.
 	#[pallet::storage]
 	#[pallet::getter(fn upcoming_sessions)]
 	pub(super) type UpcomingSessions<T: Config> = StorageDoubleMap<
-		_, 
-		Blake2_128Concat, 
-		T::AccountId, 
-		Blake2_128Concat, 
-		T::AccountId, 
-		T::Moment, 
-		ValueQuery
+		_,
+		Blake2_128Concat,
+		T::AccountId,
+		Blake2_128Concat,
+		T::AccountId,
+		T::Moment,
+		ValueQuery,
 	>;
 
 	/// The storage item mapping the mentor AccountId to a student AccountId to the vault id.
-	/// The vault id increments by one for each new session and corresponding vault. 
+	/// The vault id increments by one for each new session and corresponding vault.
 	#[pallet::storage]
 	#[pallet::getter(fn past_sessions)]
 	pub(super) type PastSessions<T: Config> = StorageDoubleMap<
-		_, 
-		Blake2_128Concat, 
-		T::AccountId, 
-		Blake2_128Concat, 
-		T::AccountId, 
-		u64, 
-		ValueQuery
+		_,
+		Blake2_128Concat,
+		T::AccountId,
+		Blake2_128Concat,
+		T::AccountId,
+		u64,
+		ValueQuery,
 	>;
 
 	/// The storage item needed to identify past session ids and vault accounts.
@@ -141,17 +140,18 @@ pub mod pallet {
 	#[pallet::getter(fn vault_count)]
 	pub type VaultTracker<T: Config> = StorageValue<_, u64, ValueQuery>;
 
-	/// The storage item mapping the mentor AccountId to a student AccountId to the corresponding vault.
+	/// The storage item mapping the mentor AccountId to a student AccountId to the corresponding
+	/// vault.
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_student_vaults)]
 	pub(super) type MentorStudentVaults<T: Config> = StorageDoubleMap<
-		_, 
-		Blake2_128Concat, 
-		T::AccountId, 
-		Blake2_128Concat, 
-		T::AccountId, 
-		VaultDetails<T::AccountId, BalanceOf<T>>, 
-		OptionQuery
+		_,
+		Blake2_128Concat,
+		T::AccountId,
+		Blake2_128Concat,
+		T::AccountId,
+		VaultDetails<T::AccountId, BalanceOf<T>>,
+		OptionQuery,
 	>;
 
 	#[pallet::event]
@@ -183,7 +183,6 @@ pub mod pallet {
 		BookingMustBeinTheFuture,
 		/// Emitted when a withdrawal does not fulfill necessary requirements.
 		WithdrawalNotPermitted,
-		
 	}
 
 	#[pallet::hooks]
@@ -210,8 +209,7 @@ pub mod pallet {
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
-
-		/// Allows a new mentor to initiate the registration process. 
+		/// Allows a new mentor to initiate the registration process.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn register_as_mentor(origin: OriginFor<T>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
@@ -221,7 +219,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Allows a mentor to set their session price. 
+		/// Allows a mentor to set their session price.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn set_session_price(origin: OriginFor<T>, price: BalanceOf<T>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
@@ -239,10 +237,11 @@ pub mod pallet {
 			if !current_availabilities.contains(&(now + timeslot)) {
 				match current_availabilities.try_push(now + timeslot) {
 					Err(e) => log::info!("{:?}", e),
-   				 	_ => ()
+					_ => (),
 				};
 				<MentorAvailabilities<T>>::insert(&who, current_availabilities)
-			} else {}
+			} else {
+			}
 			Ok(())
 		}
 
@@ -261,29 +260,34 @@ pub mod pallet {
 		/// Allows a student to book a session with a mentor.
 		#[transactional]
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn book_session(origin: OriginFor<T>, mentor: T::AccountId, timestamp: T::Moment) -> DispatchResult {
+		pub fn book_session(
+			origin: OriginFor<T>,
+			mentor: T::AccountId,
+			timestamp: T::Moment,
+		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let now = <timestamp::Pallet<T>>::get();
 			ensure!(timestamp > now, Error::<T>::BookingMustBeinTheFuture);
 			let current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			if current_availabilities.contains(&timestamp) {
 				<UpcomingSessions<T>>::insert(&mentor, &who, timestamp);
-				let _new_vault = Self::new_vault(mentor.clone(), who.clone()).map(|(vault_id, _)| vault_id);
+				let _new_vault =
+					Self::new_vault(mentor.clone(), who.clone()).map(|(vault_id, _)| vault_id);
 				match Self::make_deposit(&mentor, &who) {
 					Err(e) => log::info!("{:?}", e),
-   				 	_ => ()
+					_ => (),
 				};
 				let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
 				<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
 					current_availabilities.remove(index);
 					Ok(())
 				})
-			} else { 
-				Err(Error::<T>::TimeslotNotAvailable)? 
+			} else {
+				Err(Error::<T>::TimeslotNotAvailable)?
 			}
 		}
 
-		/// Allows a mentor to reject a session. 
+		/// Allows a mentor to reject a session.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn reject_session(origin: OriginFor<T>, student: T::AccountId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
@@ -291,7 +295,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Allows a student to cancel a session 24 hours in advance. 
+		/// Allows a student to cancel a session 24 hours in advance.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn cancel_session(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
@@ -307,7 +311,7 @@ pub mod pallet {
 		}
 
 		/// The offchain worker uses this dispatchable to remove viewed mentors from storage,
-		/// and to send them a challenge for verification. Sets Status to ChallengeSent. 
+		/// and to send them a challenge for verification. Sets Status to ChallengeSent.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(2))]
 		pub fn process_new_mentor(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
 			let _who = ensure_none(origin)?;
@@ -320,9 +324,8 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
-
-		/// The offchain worker tracks new mentor applications and sends out a challenge for verification.
-		/// It also tracks upcoming sessions to move them to past sessions storage. 
+		/// The offchain worker tracks new mentor applications and sends out a challenge for
+		/// verification. It also tracks upcoming sessions to move them to past sessions storage.
 		fn offchain_process() {
 			log::info!("Started offchain process...");
 
@@ -334,7 +337,9 @@ pub mod pallet {
 					true => {
 						new_mentors.push(mentor);
 					},
-					false => {log::info!("On false branch")},
+					false => {
+						log::info!("On false branch")
+					},
 				}
 			}
 
@@ -344,35 +349,37 @@ pub mod pallet {
 		}
 
 		pub fn offchain_unsigned_response_new_mentor(mentor: T::AccountId) {
-			let call: Call<T> = Call::process_new_mentor{ mentor: mentor };
-            match SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into()) {
+			let call: Call<T> = Call::process_new_mentor { mentor };
+			match SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into()) {
 				Err(e) => log::info!("{:?}", e),
-   				_ => ()
+				_ => (),
 			};
 		}
 
-		pub fn new_vault(mentor: T::AccountId, student: T::AccountId) -> 
-			Result<(u64, VaultDetails<T::AccountId, BalanceOf<T>>), DispatchError> {
-			
+		pub fn new_vault(
+			mentor: T::AccountId,
+			student: T::AccountId,
+		) -> Result<(u64, VaultDetails<T::AccountId, BalanceOf<T>>), DispatchError> {
 			<VaultTracker<T>>::try_mutate(|id| {
 				let new_vault_id = {
 					*id += 1;
 					*id
 				};
 				let vault_details = VaultDetails {
-					mentor: mentor.clone(), 
+					mentor: mentor.clone(),
 					student: student.clone(),
-					vault_id: new_vault_id, 
+					vault_id: new_vault_id,
 					locked_amount: 1000u32.into(),
 				};
 				<MentorStudentVaults<T>>::insert(mentor, student, vault_details.clone());
 				Ok((new_vault_id, vault_details))
-			})	
+			})
 		}
 
-		pub fn make_deposit(mentor: &T::AccountId, student: &T::AccountId) -> 
-			Result<BalanceOf<T>, DispatchError> {
-			
+		pub fn make_deposit(
+			mentor: &T::AccountId,
+			student: &T::AccountId,
+		) -> Result<BalanceOf<T>, DispatchError> {
 			let vault_id = <VaultTracker<T>>::get();
 
 			let vault_address = <Self as Vault>::account_id(vault_id);
@@ -386,20 +393,20 @@ pub mod pallet {
 				ExistenceRequirement::KeepAlive,
 			) {
 				Err(e) => log::info!("{:?}", e),
-   				_ => ()
+				_ => (),
 			};
 			Ok(price)
 		}
 
 		pub fn validate_transaction_parameters() -> TransactionValidity {
-            ValidTransaction::with_tag_prefix("OffchainWorker")
-                .priority(T::UnsignedPriority::get())
-                .longevity(5)
-                .propagate(true)
-                .build()
-        }
+			ValidTransaction::with_tag_prefix("OffchainWorker")
+				.priority(T::UnsignedPriority::get())
+				.longevity(5)
+				.propagate(true)
+				.build()
+		}
 
-		// The offchain worker sends a challenge to a new mentor. 
+		// The offchain worker sends a challenge to a new mentor.
 		pub fn send_challenge() {}
 	}
 
@@ -411,12 +418,12 @@ pub mod pallet {
 			T::PalletId::get().into_sub_account(vault_id)
 		}
 
-		// fn create_vault(mentor: Self::AccountId, student: Self::AccountId) -> Result<(u64, VaultDetails<Self::AccountId, Self::Balance>), DispatchError> {
-		// 	Self::new_vault(mentor, student)
-		// }
+		// fn create_vault(mentor: Self::AccountId, student: Self::AccountId) -> Result<(u64,
+		// VaultDetails<Self::AccountId, Self::Balance>), DispatchError> { 	Self::new_vault(mentor,
+		// student) }
 
-		// fn deposit(mentor: T::AccountId, student: T::AccountId, vault_id: Self::VaultId) -> Result<Self::Balance, DispatchError> {
-		// 	Self::make_deposit(mentor, student)
+		// fn deposit(mentor: T::AccountId, student: T::AccountId, vault_id: Self::VaultId) ->
+		// Result<Self::Balance, DispatchError> { 	Self::make_deposit(mentor, student)
 		// }
 
 		// fn withdraw_as_mentor(
@@ -435,10 +442,14 @@ pub mod pallet {
 	}
 
 	impl Default for Status {
-		fn default() -> Self { Status::New }
+		fn default() -> Self {
+			Status::New
+		}
 	}
 
 	impl MaxEncodedLen for Status {
-		fn max_encoded_len() -> usize { 256 }
+		fn max_encoded_len() -> usize {
+			256
+		}
 	}
 }

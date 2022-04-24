@@ -1,12 +1,11 @@
-use super::*;
 use crate as pallet_mentors;
-use frame_support::traits::{ConstU16, ConstU64};
-use frame_support::{PalletId, parameter_types};
-use frame_system as system;
-use sp_core::{
-	sr25519::{Public, Signature},
-	H256,
+use frame_support::{
+	parameter_types,
+	traits::{ConstU16, ConstU64},
+	PalletId,
 };
+use frame_system as system;
+use sp_core::H256;
 use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
@@ -18,7 +17,7 @@ pub const SLOT_DURATION: u64 = MILLISECS_PER_BLOCK;
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 type Balance = u64;
-pub type AccountId = u64;
+type AccountId = u64;
 
 // Configure a mock runtime to test the pallet.
 frame_support::construct_runtime!(
@@ -66,7 +65,6 @@ parameter_types! {
 }
 
 impl pallet_timestamp::Config for Test {
-	/// A timestamp: milliseconds since the unix epoch.
 	type Moment = u64;
 	type OnTimestampSet = ();
 	type MinimumPeriod = MinimumPeriod;
@@ -84,23 +82,21 @@ impl pallet_mentors::Config for Test {
 	type MaxLength = MaxAvailabilityLength;
 	type Call = Call;
 	type UnsignedPriority = UnsignedPriority;
-	type CancellationPeriod = ConstU64<{ 24*60*60*1000 }>;
+	type CancellationPeriod = ConstU64<{ 24 * 60 * 60 * 1000 }>;
 	type Currency = Balances;
 	type PalletId = VaultPalletId;
 }
 
 parameter_types! {
-    pub const ExistentialDeposit: u64 = 0;
-    pub const MaxLocks: u32 = 50;
+	pub const ExistentialDeposit: u64 = 0;
+	pub const MaxLocks: u32 = 50;
 }
 
 impl pallet_balances::Config for Test {
 	type MaxLocks = MaxLocks;
 	type MaxReserves = ();
 	type ReserveIdentifier = [u8; 8];
-	/// The type for recording an account's balance.
 	type Balance = Balance;
-	/// The ubiquitous event type.
 	type Event = Event;
 	type DustRemoval = ();
 	type ExistentialDeposit = ExistentialDeposit;
