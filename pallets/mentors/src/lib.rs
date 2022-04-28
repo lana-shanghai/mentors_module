@@ -117,7 +117,7 @@ pub mod pallet {
 		T::AccountId,
 		Blake2_128Concat,
 		T::AccountId,
-		T::Moment,
+		(T::Moment, u64),
 		ValueQuery,
 	>;
 
@@ -144,15 +144,8 @@ pub mod pallet {
 	/// vault.
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_student_vaults)]
-	pub(super) type MentorStudentVaults<T: Config> = StorageDoubleMap<
-		_,
-		Blake2_128Concat,
-		T::AccountId,
-		Blake2_128Concat,
-		T::AccountId,
-		VaultDetails<T::AccountId, BalanceOf<T>>,
-		OptionQuery,
-	>;
+	pub(super) type MentorStudentVaults<T: Config> =
+		StorageMap<_, Blake2_128Concat, u64, VaultDetails<T::AccountId, BalanceOf<T>>, OptionQuery>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -169,6 +162,10 @@ pub mod pallet {
 		RefundSuccessful,
 		/// Emitted when a mentor sets a session price.
 		PriceSet,
+		/// Emitted when a vault is successfully created.
+		VaultCreated(u64),
+		/// Emitted when a transfer has been successfully made.
+		TransferSuccessful(BalanceOf<T>),
 	}
 
 	#[pallet::error]
@@ -180,9 +177,13 @@ pub mod pallet {
 		/// Emitted when a student tries to book a timeslot that is not available.
 		TimeslotNotAvailable,
 		/// Emitted when a student tries to book a timeslot that is in the future.
-		BookingMustBeinTheFuture,
+		BookingMustBeInTheFuture,
 		/// Emitted when a withdrawal does not fulfill necessary requirements.
 		WithdrawalNotPermitted,
+		/// Emitted when a student tries to book a session with a non-registered mentor.
+		MentorNotRegistered,
+		/// Emitted when a mentor's price has not been set. 
+		MentorDidNotSetPrice,
 	}
 
 	#[pallet::hooks]
@@ -212,18 +213,18 @@ pub mod pallet {
 		/// Allows a new mentor to initiate the registration process.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn register_as_mentor(origin: OriginFor<T>) -> DispatchResult {
-			let who = ensure_signed(origin)?;
-			<NewMentors<T>>::insert(who.clone(), true);
-			log::info!("Who {:?}", who.clone());
-			Self::deposit_event(Event::NewMentorRegistered(who));
+			let mentor = ensure_signed(origin)?;
+			<NewMentors<T>>::insert(mentor.clone(), true);
+			log::info!("Who {:?}", mentor.clone());
+			Self::deposit_event(Event::NewMentorRegistered(mentor));
 			Ok(())
 		}
 
 		/// Allows a mentor to set their session price.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn set_session_price(origin: OriginFor<T>, price: BalanceOf<T>) -> DispatchResult {
-			let who = ensure_signed(origin)?;
-			<MentorPricing<T>>::insert(who.clone(), price);
+			let mentor = ensure_signed(origin)?;
+			<MentorPricing<T>>::insert(mentor.clone(), price);
 			Self::deposit_event(Event::PriceSet);
 			Ok(())
 		}
@@ -231,15 +232,15 @@ pub mod pallet {
 		/// Allows a mentor to provide an open timeslot.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn add_availability(origin: OriginFor<T>, timeslot: T::Moment) -> DispatchResult {
-			let who = ensure_signed(origin)?;
+			let mentor = ensure_signed(origin)?;
 			let now = <timestamp::Pallet<T>>::get();
-			let mut current_availabilities = <MentorAvailabilities<T>>::get(&who);
+			let mut current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			if !current_availabilities.contains(&(now + timeslot)) {
 				match current_availabilities.try_push(now + timeslot) {
 					Err(e) => log::info!("{:?}", e),
 					_ => (),
 				};
-				<MentorAvailabilities<T>>::insert(&who, current_availabilities)
+				<MentorAvailabilities<T>>::insert(&mentor, current_availabilities)
 			} else {
 			}
 			Ok(())
@@ -248,10 +249,10 @@ pub mod pallet {
 		/// Allows a mentor to remove an open timeslot.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn remove_availability(origin: OriginFor<T>, timestamp: T::Moment) -> DispatchResult {
-			let who = ensure_signed(origin)?;
-			let current_availabilities = <MentorAvailabilities<T>>::get(&who);
+			let mentor = ensure_signed(origin)?;
+			let current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
-			<MentorAvailabilities<T>>::try_mutate(&who, |current_availabilities| {
+			<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
 				current_availabilities.remove(index);
 				Ok(())
 			})
@@ -265,15 +266,15 @@ pub mod pallet {
 			mentor: T::AccountId,
 			timestamp: T::Moment,
 		) -> DispatchResult {
-			let who = ensure_signed(origin)?;
+			let student = ensure_signed(origin)?;
 			let now = <timestamp::Pallet<T>>::get();
-			ensure!(timestamp > now, Error::<T>::BookingMustBeinTheFuture);
+			ensure!(timestamp > now, Error::<T>::BookingMustBeInTheFuture);
 			let current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			if current_availabilities.contains(&timestamp) {
-				<UpcomingSessions<T>>::insert(&mentor, &who, timestamp);
 				let _new_vault =
-					Self::new_vault(mentor.clone(), who.clone()).map(|(vault_id, _)| vault_id);
-				match Self::make_deposit(&mentor, &who) {
+					Self::new_vault(mentor.clone(), student.clone()).map(|(vault_id, _)| vault_id);
+				<UpcomingSessions<T>>::insert(&mentor, &student, (timestamp, <VaultTracker<T>>::get()));
+				match Self::make_deposit(&mentor, &student) {
 					Err(e) => log::info!("{:?}", e),
 					_ => (),
 				};
@@ -288,22 +289,32 @@ pub mod pallet {
 		}
 
 		/// Allows a mentor to reject a session.
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1))]
 		pub fn reject_session(origin: OriginFor<T>, student: T::AccountId) -> DispatchResult {
-			let who = ensure_signed(origin)?;
-			<UpcomingSessions<T>>::remove(&who, &student);
+			let mentor = ensure_signed(origin)?;
+			let vault_id = <UpcomingSessions<T>>::get(&mentor, &student).1;
+			match Self::withdraw_deposit(&student, vault_id) {
+				Err(e) => log::info!("{:?}", e),
+				_ => (),
+			};
+			<UpcomingSessions<T>>::remove(&mentor, &student);
 			Ok(())
 		}
 
 		/// Allows a student to cancel a session 24 hours in advance.
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1))]
 		pub fn cancel_session(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
-			let who = ensure_signed(origin)?;
-			let upcoming_timestamp = <UpcomingSessions<T>>::get(&mentor, &who);
+			let student = ensure_signed(origin)?;
+			let upcoming_timestamp = <UpcomingSessions<T>>::get(&mentor, &student).0;
 			let now = <timestamp::Pallet<T>>::get();
 			let cancellation_period = T::CancellationPeriod::get();
 			if upcoming_timestamp - now > cancellation_period {
-				<UpcomingSessions<T>>::remove(&mentor, &who);
+				let vault_id = <UpcomingSessions<T>>::get(&mentor, &student).1;
+				<UpcomingSessions<T>>::remove(&mentor, &student);
+				match Self::withdraw_deposit(&student, vault_id) {
+					Err(e) => log::info!("{:?}", e),
+					_ => (),
+				};
 				Ok(())
 			} else {
 				Err(Error::<T>::CancellationNotPossible)?
@@ -314,7 +325,7 @@ pub mod pallet {
 		/// and to send them a challenge for verification. Sets Status to ChallengeSent.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(2))]
 		pub fn process_new_mentor(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
-			let _who = ensure_none(origin)?;
+			let _ocw = ensure_none(origin)?;
 			<NewMentors<T>>::remove(&mentor);
 			Self::send_challenge();
 			<MentorCredentials<T>>::insert(&mentor, Status::ChallengeSent);
@@ -350,10 +361,7 @@ pub mod pallet {
 
 		pub fn offchain_unsigned_response_new_mentor(mentor: T::AccountId) {
 			let call: Call<T> = Call::process_new_mentor { mentor };
-			match SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into()) {
-				Err(e) => log::info!("{:?}", e),
-				_ => (),
-			};
+			SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into());
 		}
 
 		pub fn new_vault(
@@ -369,9 +377,10 @@ pub mod pallet {
 					mentor: mentor.clone(),
 					student: student.clone(),
 					vault_id: new_vault_id,
-					locked_amount: 1000u32.into(),
+					locked_amount: 0u32.into(),
 				};
-				<MentorStudentVaults<T>>::insert(mentor, student, vault_details.clone());
+				<MentorStudentVaults<T>>::insert(new_vault_id, vault_details.clone());
+				Self::deposit_event(Event::VaultCreated(new_vault_id));
 				Ok((new_vault_id, vault_details))
 			})
 		}
@@ -380,10 +389,10 @@ pub mod pallet {
 			mentor: &T::AccountId,
 			student: &T::AccountId,
 		) -> Result<BalanceOf<T>, DispatchError> {
+			
 			let vault_id = <VaultTracker<T>>::get();
-
 			let vault_address = <Self as Vault>::account_id(vault_id);
-			log::info!("VAULT ADDRESS: {:?}", vault_address);
+			ensure!(<MentorPricing<T>>::get(&mentor).is_some(), Error::<T>::MentorDidNotSetPrice);
 			let price = <MentorPricing<T>>::get(&mentor).unwrap();
 
 			match T::Currency::transfer(
@@ -395,7 +404,34 @@ pub mod pallet {
 				Err(e) => log::info!("{:?}", e),
 				_ => (),
 			};
-			Ok(price)
+			<MentorStudentVaults<T>>::try_mutate(vault_id, |vault_details| {
+				vault_details.as_mut().unwrap().locked_amount += price;
+				Self::deposit_event(Event::TransferSuccessful(price));
+				Ok(price)
+			})
+			// TODO return error
+		}
+
+		pub fn withdraw_deposit(
+			account: &T::AccountId,
+			vault_id: u64,
+		) -> Result<BalanceOf<T>, DispatchError> {
+			let vault_address = <Self as Vault>::account_id(vault_id);
+			let amount = <MentorStudentVaults<T>>::get(vault_id).unwrap().locked_amount;
+			match T::Currency::transfer(
+				&vault_address,
+				&account,
+				amount,
+				ExistenceRequirement::AllowDeath,
+			) {
+				Err(e) => log::info!("{:?}", e),
+				_ => (),
+			};
+			<MentorStudentVaults<T>>::try_mutate(vault_id, |vault_details| {
+				vault_details.as_mut().unwrap().locked_amount -= amount;
+				Ok(amount)
+			})
+			// TODO return error
 		}
 
 		pub fn validate_transaction_parameters() -> TransactionValidity {
@@ -422,23 +458,12 @@ pub mod pallet {
 		// VaultDetails<Self::AccountId, Self::Balance>), DispatchError> { 	Self::new_vault(mentor,
 		// student) }
 
-		// fn deposit(mentor: T::AccountId, student: T::AccountId, vault_id: Self::VaultId) ->
-		// Result<Self::Balance, DispatchError> { 	Self::make_deposit(mentor, student)
-		// }
-
-		// fn withdraw_as_mentor(
-		// 	mentor: &Self::AccountId,
-		// 	amount: Self::Balance,
-		// ) -> Result<Self::Balance, DispatchError> {
-		// 	Self::refund_deposit(from, amount)
-		// }
-
-		// fn withdraw_as_student(
-		// 	student: &Self::AccountId,
-		// 	amount: Self::Balance,
-		// ) -> Result<Self::Balance, DispatchError> {
-		// 	Self::withdraw_deposit(from, amount)
-		// }
+		fn withdraw(
+			account: &Self::AccountId,
+			vault_id: u64,
+		) -> Result<Self::Balance, DispatchError> {
+			Self::withdraw_deposit(account, vault_id)
+		}
 	}
 
 	impl Default for Status {

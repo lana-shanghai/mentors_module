@@ -24,22 +24,6 @@ pub trait Vault {
 	//fn create_vault(mentor: Self::AccountId, student: Self::AccountId) -> Result<(u64,
 	// VaultDetails<Self::AccountId, Self::Balance>), DispatchError>;
 
-	// Deposit into the vault.
-	// fn deposit(
-	// 	mentor: Self::AccountId,
-	//     student: Self::AccountId,
-	// 	vault_id: Self::VaultId,
-	// ) -> Result<Self::Balance, DispatchError>;
-
-	// Withdraw collateral from the vault.
-	// fn withdraw_as_mentor(
-	// 	from: &Self::AccountId,
-	// 	amount: Self::Balance,
-	// ) -> Result<Self::Balance, DispatchError>;
-
-	// Withdraw collateral from the vault.
-	// fn withdraw_as_student(
-	// 	from: &Self::AccountId,
-	// 	amount: Self::Balance,
-	// ) -> Result<Self::Balance, DispatchError>;
+	// Withdraw deposit from the vault.
+	fn withdraw(from: &Self::AccountId, vault_id: u64) -> Result<Self::Balance, DispatchError>;
 }
