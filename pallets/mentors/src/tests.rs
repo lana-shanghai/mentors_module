@@ -3,6 +3,7 @@ use crate::{mock::*, Error, Event};
 use vault_primitives::Vault;
 use frame_support::{
 	assert_noop, assert_ok,
+	traits::{tokens::ExistenceRequirement, Currency},
 };
 
 fn events() -> Vec<mock::Event> {
@@ -65,12 +66,12 @@ fn student_cannot_book_unavailable_timeslot() {
 	});
 }
 
-// #[test]
-// fn booking_session_moves_correct_amount_to_vault() {
-// 	new_test_ext().execute_with(|| {
-// 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(1u64).into()));
-// 	});
-// }
+#[test]
+fn transfer_works() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(<Balances as Currency<_>>::transfer(&1u64, &2u64, 1300, ExistenceRequirement::KeepAlive));
+	});
+}
 
 // #[test]
 // fn new_mentor_can_register() {

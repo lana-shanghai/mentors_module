@@ -131,7 +131,7 @@ pub mod pallet {
 		T::AccountId,
 		Blake2_128Concat,
 		T::AccountId,
-		u64,
+		(T::Moment, u64),
 		ValueQuery,
 	>;
 
@@ -184,11 +184,20 @@ pub mod pallet {
 		MentorNotRegistered,
 		/// Emitted when a mentor's price has not been set. 
 		MentorDidNotSetPrice,
+		/// Emitted when a balance transfer fails. 
+		TransferFailed,
+		/// Emitted when a student tries to book a session when there is already a scheduled session.
+		CannotBookTwoSessionsUpfront,
 	}
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		fn offchain_worker(_block_number: T::BlockNumber) {
+		fn on_initialize(_block_number: BlockNumberFor<T>) -> Weight {
+			Self::process_past_sessions();
+			0 // TODO: Return the non-negotiable weight consumed in the block.
+		 }
+
+		fn offchain_worker(_block_number: BlockNumberFor<T>) {
 			log::info!("Entering offchain worker...");
 			Self::offchain_process();
 		}
@@ -268,16 +277,14 @@ pub mod pallet {
 		) -> DispatchResult {
 			let student = ensure_signed(origin)?;
 			let now = <timestamp::Pallet<T>>::get();
+			ensure!(<UpcomingSessions<T>>::get(&mentor, &student).0 < now, Error::<T>::CannotBookTwoSessionsUpfront);
 			ensure!(timestamp > now, Error::<T>::BookingMustBeInTheFuture);
 			let current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			if current_availabilities.contains(&timestamp) {
 				let _new_vault =
 					Self::new_vault(mentor.clone(), student.clone()).map(|(vault_id, _)| vault_id);
 				<UpcomingSessions<T>>::insert(&mentor, &student, (timestamp, <VaultTracker<T>>::get()));
-				match Self::make_deposit(&mentor, &student) {
-					Err(e) => log::info!("{:?}", e),
-					_ => (),
-				};
+				Self::make_deposit(&mentor, &student)?;
 				let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
 				<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
 					current_availabilities.remove(index);
@@ -293,10 +300,7 @@ pub mod pallet {
 		pub fn reject_session(origin: OriginFor<T>, student: T::AccountId) -> DispatchResult {
 			let mentor = ensure_signed(origin)?;
 			let vault_id = <UpcomingSessions<T>>::get(&mentor, &student).1;
-			match Self::withdraw_deposit(&student, vault_id) {
-				Err(e) => log::info!("{:?}", e),
-				_ => (),
-			};
+			Self::withdraw_deposit(&student, vault_id)?;
 			<UpcomingSessions<T>>::remove(&mentor, &student);
 			Ok(())
 		}
@@ -310,11 +314,8 @@ pub mod pallet {
 			let cancellation_period = T::CancellationPeriod::get();
 			if upcoming_timestamp - now > cancellation_period {
 				let vault_id = <UpcomingSessions<T>>::get(&mentor, &student).1;
+				Self::withdraw_deposit(&student, vault_id)?;
 				<UpcomingSessions<T>>::remove(&mentor, &student);
-				match Self::withdraw_deposit(&student, vault_id) {
-					Err(e) => log::info!("{:?}", e),
-					_ => (),
-				};
 				Ok(())
 			} else {
 				Err(Error::<T>::CancellationNotPossible)?
@@ -364,6 +365,24 @@ pub mod pallet {
 			SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into());
 		}
 
+		pub fn process_past_sessions() -> DispatchResult {
+			for (mentor, student, session) in <UpcomingSessions<T>>::iter() {
+				let now = <timestamp::Pallet<T>>::get();
+				if session.0 < now {
+					match Self::withdraw_deposit(&mentor, session.1) {
+						Err(e) => return Err(e),
+						Ok(amount) => {
+							<UpcomingSessions<T>>::remove(&mentor, &student);
+							<PastSessions<T>>::insert(&mentor, &student, session);
+							()
+						},
+					};
+					
+				}
+			}
+			Ok(())
+		}
+
 		pub fn new_vault(
 			mentor: T::AccountId,
 			student: T::AccountId,
@@ -395,21 +414,17 @@ pub mod pallet {
 			ensure!(<MentorPricing<T>>::get(&mentor).is_some(), Error::<T>::MentorDidNotSetPrice);
 			let price = <MentorPricing<T>>::get(&mentor).unwrap();
 
-			match T::Currency::transfer(
+			T::Currency::transfer(
 				student,
 				&vault_address,
 				price,
 				ExistenceRequirement::KeepAlive,
-			) {
-				Err(e) => log::info!("{:?}", e),
-				_ => (),
-			};
+			)?;
 			<MentorStudentVaults<T>>::try_mutate(vault_id, |vault_details| {
 				vault_details.as_mut().unwrap().locked_amount += price;
 				Self::deposit_event(Event::TransferSuccessful(price));
 				Ok(price)
 			})
-			// TODO return error
 		}
 
 		pub fn withdraw_deposit(
@@ -418,20 +433,17 @@ pub mod pallet {
 		) -> Result<BalanceOf<T>, DispatchError> {
 			let vault_address = <Self as Vault>::account_id(vault_id);
 			let amount = <MentorStudentVaults<T>>::get(vault_id).unwrap().locked_amount;
-			match T::Currency::transfer(
+			T::Currency::transfer(
 				&vault_address,
 				&account,
 				amount,
 				ExistenceRequirement::AllowDeath,
-			) {
-				Err(e) => log::info!("{:?}", e),
-				_ => (),
-			};
+			)?;
 			<MentorStudentVaults<T>>::try_mutate(vault_id, |vault_details| {
 				vault_details.as_mut().unwrap().locked_amount -= amount;
+				Self::deposit_event(Event::TransferSuccessful(amount));
 				Ok(amount)
 			})
-			// TODO return error
 		}
 
 		pub fn validate_transaction_parameters() -> TransactionValidity {
