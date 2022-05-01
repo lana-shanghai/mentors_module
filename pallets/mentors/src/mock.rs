@@ -114,5 +114,11 @@ where
 
 // Build genesis storage according to the mock runtime.
 pub fn new_test_ext() -> sp_io::TestExternalities {
-	system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
+	let mut t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
+	pallet_balances::GenesisConfig::<Test> {
+		balances: vec![(1, 10_000), (2, 10_000), (3, 10_000), (4, 10_000)],
+	}
+	.assimilate_storage(&mut t)
+	.unwrap();
+	t.into()
 }

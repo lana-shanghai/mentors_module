@@ -1,3 +1,87 @@
+// GNU GENERAL PUBLIC LICENSE
+// Version 3, 29 June 2007
+
+//  Copyright (C) 2007 Free Software Foundation, Inc. <http://fsf.org/>
+//  Everyone is permitted to copy and distribute verbatim copies
+//  of this license document, but changing it is not allowed.
+
+//! # A pallet that serves as a booking platform for a service provider.
+//!
+//! ## Overview
+//!
+//! ### User Types
+//!
+//! * Mentor - A user that solves necessary challenges in order to prove their credentials as a
+//!   mentor.
+//! * Student - A user that can book sessions with mentors according to their needs.
+//!
+//! ### Mechanics
+//!
+//! #### Registering as a mentor
+//!
+//! A user can register as a mentor, which creates a new entry in the NewMentors storage.
+//! Every block, the NewMentors storage is iterated over to see if anyone expressed interest.
+//! They are sent a challenge and removed from NewMentors. An entry appears in MentorCredentials
+//! and their status in the storage changes to ChallengeSent.
+//!
+//! #### Setting the session price
+//!
+//! The mentor should then set a price for their session. A session can't be booked without a price.
+//! 10**12 units correspond to 1 unit deducted from the prefunded user account.
+//!
+//! #### Adding and removing available timeslots
+//!
+//! The mentor can now offer time availabilities by submitting timeslots (taken in milliseconds from
+//! now). For example, submitting a timeslot 24*60*60*1000 = 86_400_000 would book a session 24
+//! hours from now. The corresponding timestamp will appear in the MentorAvailabilities storage. If
+//! something changes, the mentor can remove a timeslot by submitting the `remove_availability`
+//! extrinsic.
+//!
+//! #### Booking a session
+//!
+//! The user can book a session with a mentor by picking a timestamp from MentorAvailabilities
+//! storage and sending an extrinsic to book a session. The timestamp has to be available, the user
+//! must have enough funds to pay for the session. When someone books a session, the vault ID
+//! tracker updates incrementally. Each vault ID has a corresponding vault address, derived via
+//! PalletId's `into_sub_account` method. The value equivalent to the price per one session is
+//! transferred to the newly generated vault address.
+//!
+//! #### Cancelling a session
+//!
+//! A user can cancel a session they booked earlier if there are 24 hours until the booked timeslot.
+//! The funds return to their account, and the transfer is made with
+//! `ExistenceRequirement::AllowDeath`.
+//!
+//! #### Rejecting a session
+//!
+//! A mentor can reject a session if they are unable to attend. The funds return to the student's
+//! address.
+//!
+//! #### On initialize
+//!
+//! Every block the UpcomingSessions storage is iterated over to check if the timestamp has passed.
+//! If so, the funds are moved from the vault address to the mentor's address, and the session
+//! information is moved to PastSessions storage.
+//!
+//! #### On finalize
+//!
+//! At the end of every block after every new mentor was sent a challenge, they are removed from 
+//! the NewMentors storage to MentorCredentials, where their Status is set to ChallengeSent.
+//!
+//!
+//!
+//!
+//!
+//!
+//!
+//!
+//!
+//!
+//!
+//!
+//!
+//!
+
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(unused_variables)]
 #![allow(type_alias_bounds)]
@@ -13,8 +97,9 @@ mod tests;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-use frame_support::sp_runtime::transaction_validity::{
-	InvalidTransaction, TransactionValidity, ValidTransaction,
+use frame_support::sp_runtime::{
+	traits::Zero,
+	transaction_validity::{InvalidTransaction, TransactionValidity, ValidTransaction},
 };
 
 use pallet_timestamp::{self as timestamp};
@@ -140,8 +225,7 @@ pub mod pallet {
 	#[pallet::getter(fn vault_count)]
 	pub type VaultTracker<T: Config> = StorageValue<_, u64, ValueQuery>;
 
-	/// The storage item mapping the mentor AccountId to a student AccountId to the corresponding
-	/// vault.
+	/// The storage item mapping the vault id to the corresponding vault details.
 	#[pallet::storage]
 	#[pallet::getter(fn mentor_student_vaults)]
 	pub(super) type MentorStudentVaults<T: Config> =
@@ -182,11 +266,12 @@ pub mod pallet {
 		WithdrawalNotPermitted,
 		/// Emitted when a student tries to book a session with a non-registered mentor.
 		MentorNotRegistered,
-		/// Emitted when a mentor's price has not been set. 
+		/// Emitted when a mentor's price has not been set.
 		MentorDidNotSetPrice,
-		/// Emitted when a balance transfer fails. 
+		/// Emitted when a balance transfer fails.
 		TransferFailed,
-		/// Emitted when a student tries to book a session when there is already a scheduled session.
+		/// Emitted when a student tries to book a session when there is already a scheduled
+		/// session.
 		CannotBookTwoSessionsUpfront,
 	}
 
@@ -195,11 +280,15 @@ pub mod pallet {
 		fn on_initialize(_block_number: BlockNumberFor<T>) -> Weight {
 			Self::process_past_sessions();
 			0 // TODO: Return the non-negotiable weight consumed in the block.
-		 }
+		}
 
 		fn offchain_worker(_block_number: BlockNumberFor<T>) {
 			log::info!("Entering offchain worker...");
 			Self::offchain_process();
+		}
+
+		fn on_finalize(_block_number: BlockNumberFor<T>) {
+			Self::process_new_mentors();
 		}
 	}
 
@@ -209,7 +298,7 @@ pub mod pallet {
 
 		/// Validate unsigned call to this module.
 		fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-			if let Call::process_new_mentor { mentor } = call {
+			if let Call::send_challenge { mentor } = call {
 				Self::validate_transaction_parameters()
 			} else {
 				InvalidTransaction::Call.into()
@@ -276,14 +365,22 @@ pub mod pallet {
 			timestamp: T::Moment,
 		) -> DispatchResult {
 			let student = ensure_signed(origin)?;
+			// TODO: add check that the mentor's status has been set to Verified.
 			let now = <timestamp::Pallet<T>>::get();
-			ensure!(<UpcomingSessions<T>>::get(&mentor, &student).0 < now, Error::<T>::CannotBookTwoSessionsUpfront);
+			ensure!(
+				<UpcomingSessions<T>>::get(&mentor, &student).0 == T::Moment::zero(),
+				Error::<T>::CannotBookTwoSessionsUpfront
+			);
 			ensure!(timestamp > now, Error::<T>::BookingMustBeInTheFuture);
 			let current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			if current_availabilities.contains(&timestamp) {
 				let _new_vault =
 					Self::new_vault(mentor.clone(), student.clone()).map(|(vault_id, _)| vault_id);
-				<UpcomingSessions<T>>::insert(&mentor, &student, (timestamp, <VaultTracker<T>>::get()));
+				<UpcomingSessions<T>>::insert(
+					&mentor,
+					&student,
+					(timestamp, <VaultTracker<T>>::get()),
+				);
 				Self::make_deposit(&mentor, &student)?;
 				let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
 				<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
@@ -296,6 +393,7 @@ pub mod pallet {
 		}
 
 		/// Allows a mentor to reject a session.
+		#[transactional]
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1))]
 		pub fn reject_session(origin: OriginFor<T>, student: T::AccountId) -> DispatchResult {
 			let mentor = ensure_signed(origin)?;
@@ -306,6 +404,7 @@ pub mod pallet {
 		}
 
 		/// Allows a student to cancel a session 24 hours in advance.
+		#[transactional]
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1))]
 		pub fn cancel_session(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
 			let student = ensure_signed(origin)?;
@@ -322,22 +421,17 @@ pub mod pallet {
 			}
 		}
 
-		/// The offchain worker uses this dispatchable to remove viewed mentors from storage,
-		/// and to send them a challenge for verification. Sets Status to ChallengeSent.
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(2))]
-		pub fn process_new_mentor(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
-			let _ocw = ensure_none(origin)?;
-			<NewMentors<T>>::remove(&mentor);
-			Self::send_challenge();
-			<MentorCredentials<T>>::insert(&mentor, Status::ChallengeSent);
-			Self::deposit_event(Event::MentorInVerificationProcess(mentor));
+		// The offchain worker sends a challenge to a new mentor.
+		#[pallet::weight(10_000 + T::DbWeight::get().reads(1))]
+		pub fn send_challenge(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
+			ensure_none(origin)?;
 			Ok(())
-		}
+		}	
 	}
 
 	impl<T: Config> Pallet<T> {
 		/// The offchain worker tracks new mentor applications and sends out a challenge for
-		/// verification. It also tracks upcoming sessions to move them to past sessions storage.
+		/// verification.
 		fn offchain_process() {
 			log::info!("Started offchain process...");
 
@@ -361,10 +455,11 @@ pub mod pallet {
 		}
 
 		pub fn offchain_unsigned_response_new_mentor(mentor: T::AccountId) {
-			let call: Call<T> = Call::process_new_mentor { mentor };
+			let call: Call<T> = Call::send_challenge { mentor };
 			SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into());
 		}
 
+		/// Move funds from a vault to a mentor's address and update storage accordingly.
 		pub fn process_past_sessions() -> DispatchResult {
 			for (mentor, student, session) in <UpcomingSessions<T>>::iter() {
 				let now = <timestamp::Pallet<T>>::get();
@@ -377,12 +472,23 @@ pub mod pallet {
 							()
 						},
 					};
-					
 				}
 			}
 			Ok(())
 		}
 
+		/// Remove new mentors from storage at the end of the block. OCW sends
+		/// them a challenge for verification. Status is set to ChallengeSent.
+		pub fn process_new_mentors() -> DispatchResult {
+			for (mentor, _) in <NewMentors<T>>::iter() {
+				<NewMentors<T>>::remove(&mentor);
+				<MentorCredentials<T>>::insert(&mentor, Status::ChallengeSent);
+				Self::deposit_event(Event::MentorInVerificationProcess(mentor));
+			}
+			Ok(())
+		}
+
+		/// Helper function to create a new vault from the new vault id.
 		pub fn new_vault(
 			mentor: T::AccountId,
 			student: T::AccountId,
@@ -404,22 +510,17 @@ pub mod pallet {
 			})
 		}
 
+		/// Helper function to move funds from a student to a vault.
 		pub fn make_deposit(
 			mentor: &T::AccountId,
 			student: &T::AccountId,
 		) -> Result<BalanceOf<T>, DispatchError> {
-			
 			let vault_id = <VaultTracker<T>>::get();
 			let vault_address = <Self as Vault>::account_id(vault_id);
 			ensure!(<MentorPricing<T>>::get(&mentor).is_some(), Error::<T>::MentorDidNotSetPrice);
 			let price = <MentorPricing<T>>::get(&mentor).unwrap();
 
-			T::Currency::transfer(
-				student,
-				&vault_address,
-				price,
-				ExistenceRequirement::KeepAlive,
-			)?;
+			T::Currency::transfer(student, &vault_address, price, ExistenceRequirement::KeepAlive)?;
 			<MentorStudentVaults<T>>::try_mutate(vault_id, |vault_details| {
 				vault_details.as_mut().unwrap().locked_amount += price;
 				Self::deposit_event(Event::TransferSuccessful(price));
@@ -427,12 +528,14 @@ pub mod pallet {
 			})
 		}
 
+		/// Helper function to move funds from a vault to an account.
 		pub fn withdraw_deposit(
 			account: &T::AccountId,
 			vault_id: u64,
 		) -> Result<BalanceOf<T>, DispatchError> {
 			let vault_address = <Self as Vault>::account_id(vault_id);
 			let amount = <MentorStudentVaults<T>>::get(vault_id).unwrap().locked_amount;
+
 			T::Currency::transfer(
 				&vault_address,
 				&account,
@@ -453,9 +556,6 @@ pub mod pallet {
 				.propagate(true)
 				.build()
 		}
-
-		// The offchain worker sends a challenge to a new mentor.
-		pub fn send_challenge() {}
 	}
 
 	impl<T: Config> Vault for Pallet<T> {
@@ -465,10 +565,6 @@ pub mod pallet {
 		fn account_id(vault_id: u64) -> Self::AccountId {
 			T::PalletId::get().into_sub_account(vault_id)
 		}
-
-		// fn create_vault(mentor: Self::AccountId, student: Self::AccountId) -> Result<(u64,
-		// VaultDetails<Self::AccountId, Self::Balance>), DispatchError> { 	Self::new_vault(mentor,
-		// student) }
 
 		fn withdraw(
 			account: &Self::AccountId,
