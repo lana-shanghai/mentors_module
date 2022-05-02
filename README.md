@@ -21,3 +21,8 @@ without launching it:
 cargo build --release
 ```
 
+### Generate pallet documentation
+
+```sh
+cargo doc -p pallet-mentors --no-deps
+```

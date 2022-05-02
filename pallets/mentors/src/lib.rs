@@ -67,20 +67,7 @@
 //!
 //! At the end of every block after every new mentor was sent a challenge, they are removed from 
 //! the NewMentors storage to MentorCredentials, where their Status is set to ChallengeSent.
-//!
-//!
-//!
-//!
-//!
-//!
-//!
-//!
-//!
-//!
-//!
-//!
-//!
-//!
+
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(unused_variables)]
@@ -239,7 +226,7 @@ pub mod pallet {
 		/// Emitted when the offchain worker sends the challenge to the mentor.
 		MentorInVerificationProcess(T::AccountId),
 		/// Emitted when a student make a deposit into the vault.
-		DepositSuccessful(T::AccountId),
+		DepositSuccessful,
 		/// Emitted when the mentor withdraws from the vault.
 		WithdrawalSuccessful,
 		/// Emitted when a student gets a refund from the vault.
@@ -309,11 +296,11 @@ pub mod pallet {
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
 		/// Allows a new mentor to initiate the registration process.
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1))]
 		pub fn register_as_mentor(origin: OriginFor<T>) -> DispatchResult {
 			let mentor = ensure_signed(origin)?;
+			ensure!(<MentorCredentials<T>>::get(&mentor) == Status::New, Error::<T>::MentorAlreadyRegistered);
 			<NewMentors<T>>::insert(mentor.clone(), true);
-			log::info!("Who {:?}", mentor.clone());
 			Self::deposit_event(Event::NewMentorRegistered(mentor));
 			Ok(())
 		}
@@ -328,7 +315,7 @@ pub mod pallet {
 		}
 
 		/// Allows a mentor to provide an open timeslot.
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(2, 1))]
 		pub fn add_availability(origin: OriginFor<T>, timeslot: T::Moment) -> DispatchResult {
 			let mentor = ensure_signed(origin)?;
 			let now = <timestamp::Pallet<T>>::get();
@@ -345,7 +332,7 @@ pub mod pallet {
 		}
 
 		/// Allows a mentor to remove an open timeslot.
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1))]
 		pub fn remove_availability(origin: OriginFor<T>, timestamp: T::Moment) -> DispatchResult {
 			let mentor = ensure_signed(origin)?;
 			let current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
@@ -365,6 +352,7 @@ pub mod pallet {
 			timestamp: T::Moment,
 		) -> DispatchResult {
 			let student = ensure_signed(origin)?;
+			ensure!(<MentorCredentials<T>>::get(&mentor) != Status::New, Error::<T>::MentorNotRegistered);
 			// TODO: add check that the mentor's status has been set to Verified.
 			let now = <timestamp::Pallet<T>>::get();
 			ensure!(
@@ -382,6 +370,7 @@ pub mod pallet {
 					(timestamp, <VaultTracker<T>>::get()),
 				);
 				Self::make_deposit(&mentor, &student)?;
+				Self::deposit_event(Event::DepositSuccessful);
 				let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
 				<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
 					current_availabilities.remove(index);
@@ -400,6 +389,7 @@ pub mod pallet {
 			let vault_id = <UpcomingSessions<T>>::get(&mentor, &student).1;
 			Self::withdraw_deposit(&student, vault_id)?;
 			<UpcomingSessions<T>>::remove(&mentor, &student);
+			Self::deposit_event(Event::RefundSuccessful);
 			Ok(())
 		}
 
@@ -415,6 +405,7 @@ pub mod pallet {
 				let vault_id = <UpcomingSessions<T>>::get(&mentor, &student).1;
 				Self::withdraw_deposit(&student, vault_id)?;
 				<UpcomingSessions<T>>::remove(&mentor, &student);
+				Self::deposit_event(Event::RefundSuccessful);
 				Ok(())
 			} else {
 				Err(Error::<T>::CancellationNotPossible)?
@@ -444,7 +435,7 @@ pub mod pallet {
 						new_mentors.push(mentor);
 					},
 					false => {
-						log::info!("On false branch")
+						log::info!("On false branch") // TODO: remove logging
 					},
 				}
 			}

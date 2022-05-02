@@ -1,9 +1,8 @@
-use crate::{mock::*, Error, Event, *};
+use crate::{mock::*, Error, *};
 use frame_support::{
 	assert_noop, assert_ok,
 	traits::{tokens::ExistenceRequirement, Currency},
 };
-use vault_primitives::Vault;
 
 fn events() -> Vec<mock::Event> {
 	let evt = System::events().into_iter().map(|evt| evt.event).collect::<Vec<_>>();
@@ -22,7 +21,7 @@ fn new_mentor_can_register() {
 fn mentor_status_changes_to_challenge_sent() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(2u64).into()));
-		assert_ok!(MentorsModule::process_new_mentor(Origin::none(), 2u64));
+		assert_ok!(MentorsModule::process_new_mentors());
 		assert_eq!(MentorCredentials::<Test>::get(2u64), Status::ChallengeSent);
 	});
 }
@@ -47,10 +46,24 @@ fn mentor_can_submit_availability() {
 }
 
 #[test]
+fn transfer_works() {
+	new_test_ext().execute_with(|| {
+		assert_eq!(<Balances as Currency<_>>::total_issuance(), 40_000);
+		assert_ok!(<Balances as Currency<_>>::transfer(
+			&1u64,
+			&2u64,
+			1300,
+			ExistenceRequirement::KeepAlive
+		));
+		assert_eq!(<Balances as Currency<_>>::free_balance(&1u64), 8700);
+	});
+}
+
+#[test]
 fn student_can_book_session() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(2u64).into()));
-		assert_ok!(MentorsModule::process_new_mentor(Origin::none(), 2u64));
+		assert_ok!(MentorsModule::process_new_mentors());
 		assert_ok!(MentorsModule::set_session_price(Origin::signed(2u64).into(), 1200));
 		assert_ok!(MentorsModule::add_availability(
 			Origin::signed(2u64).into(),
@@ -69,7 +82,7 @@ fn student_can_book_session() {
 fn student_cannot_book_unavailable_timeslot() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(2u64).into()));
-		assert_ok!(MentorsModule::process_new_mentor(Origin::none(), 2u64));
+		assert_ok!(MentorsModule::process_new_mentors());
 		assert_ok!(MentorsModule::add_availability(
 			Origin::signed(2u64).into(),
 			86_400_000 + 100_000
@@ -86,50 +99,21 @@ fn student_cannot_book_unavailable_timeslot() {
 }
 
 #[test]
-fn transfer_works() {
+fn student_cannot_cancel_less_than_24h_upfront() {
 	new_test_ext().execute_with(|| {
-		assert_eq!(<Balances as Currency<_>>::total_issuance(), 40_000);
-		assert_ok!(<Balances as Currency<_>>::transfer(
-			&1u64,
-			&2u64,
-			1300,
-			ExistenceRequirement::KeepAlive
+		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(2u64).into()));
+		assert_ok!(MentorsModule::process_new_mentors());
+		assert_ok!(MentorsModule::add_availability(
+			Origin::signed(2u64).into(),
+			86_400_000 - 100_000
 		));
-		assert_eq!(<Balances as Currency<_>>::free_balance(&1u64), 8700);
+		assert_noop!(
+			MentorsModule::cancel_session(
+				Origin::signed(1u64).into(),
+				2u64
+			),
+			Error::<Test>::CancellationNotPossible
+		);
 	});
 }
 
-// #[test]
-// fn new_mentor_can_register() {
-// 	new_test_ext().execute_with(|| {
-// 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(1u64).into()));
-// 	});
-// }
-
-// #[test]
-// fn new_mentor_can_register() {
-// 	new_test_ext().execute_with(|| {
-// 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(1u64).into()));
-// 	});
-// }
-
-// #[test]
-// fn new_mentor_can_register() {
-// 	new_test_ext().execute_with(|| {
-// 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(1u64).into()));
-// 	});
-// }
-
-// #[test]
-// fn new_mentor_can_register() {
-// 	new_test_ext().execute_with(|| {
-// 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(1u64).into()));
-// 	});
-// }
-
-// #[test]
-// fn new_mentor_can_register() {
-// 	new_test_ext().execute_with(|| {
-// 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(1u64).into()));
-// 	});
-// }
