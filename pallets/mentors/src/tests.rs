@@ -108,12 +108,8 @@ fn student_cannot_cancel_less_than_24h_upfront() {
 			86_400_000 - 100_000
 		));
 		assert_noop!(
-			MentorsModule::cancel_session(
-				Origin::signed(1u64).into(),
-				2u64
-			),
+			MentorsModule::cancel_session(Origin::signed(1u64).into(), 2u64),
 			Error::<Test>::CancellationNotPossible
 		);
 	});
 }
-

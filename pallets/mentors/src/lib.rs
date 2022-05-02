@@ -65,9 +65,8 @@
 //!
 //! #### On finalize
 //!
-//! At the end of every block after every new mentor was sent a challenge, they are removed from 
+//! At the end of every block after every new mentor was sent a challenge, they are removed from
 //! the NewMentors storage to MentorCredentials, where their Status is set to ChallengeSent.
-
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(unused_variables)]
@@ -299,7 +298,10 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1))]
 		pub fn register_as_mentor(origin: OriginFor<T>) -> DispatchResult {
 			let mentor = ensure_signed(origin)?;
-			ensure!(<MentorCredentials<T>>::get(&mentor) == Status::New, Error::<T>::MentorAlreadyRegistered);
+			ensure!(
+				<MentorCredentials<T>>::get(&mentor) == Status::New,
+				Error::<T>::MentorAlreadyRegistered
+			);
 			<NewMentors<T>>::insert(mentor.clone(), true);
 			Self::deposit_event(Event::NewMentorRegistered(mentor));
 			Ok(())
@@ -352,7 +354,10 @@ pub mod pallet {
 			timestamp: T::Moment,
 		) -> DispatchResult {
 			let student = ensure_signed(origin)?;
-			ensure!(<MentorCredentials<T>>::get(&mentor) != Status::New, Error::<T>::MentorNotRegistered);
+			ensure!(
+				<MentorCredentials<T>>::get(&mentor) != Status::New,
+				Error::<T>::MentorNotRegistered
+			);
 			// TODO: add check that the mentor's status has been set to Verified.
 			let now = <timestamp::Pallet<T>>::get();
 			ensure!(
@@ -417,7 +422,7 @@ pub mod pallet {
 		pub fn send_challenge(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
 			ensure_none(origin)?;
 			Ok(())
-		}	
+		}
 	}
 
 	impl<T: Config> Pallet<T> {
