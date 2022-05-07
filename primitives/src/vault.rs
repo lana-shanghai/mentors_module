@@ -1,5 +1,5 @@
 use codec::{Decode, Encode};
-use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
+use frame_support::pallet_prelude::*;
 use scale_info::TypeInfo;
 
 #[derive(Copy, Clone, Encode, Decode, Default, Debug, PartialEq, TypeInfo, MaxEncodedLen)]

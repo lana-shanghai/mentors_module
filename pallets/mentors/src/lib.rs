@@ -311,7 +311,7 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn set_session_price(origin: OriginFor<T>, price: BalanceOf<T>) -> DispatchResult {
 			let mentor = ensure_signed(origin)?;
-			<MentorPricing<T>>::insert(mentor.clone(), price);
+			<MentorPricing<T>>::insert(mentor, price);
 			Self::deposit_event(Event::PriceSet);
 			Ok(())
 		}
@@ -323,9 +323,8 @@ pub mod pallet {
 			let now = <timestamp::Pallet<T>>::get();
 			let mut current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			if !current_availabilities.contains(&(now + timeslot)) {
-				match current_availabilities.try_push(now + timeslot) {
-					Err(e) => log::info!("{:?}", e),
-					_ => (),
+				if let Err(e) = current_availabilities.try_push(now + timeslot) {
+					log::info!("{:?}", e)
 				};
 				<MentorAvailabilities<T>>::insert(&mentor, current_availabilities)
 			} else {
@@ -382,7 +381,7 @@ pub mod pallet {
 					Ok(())
 				})
 			} else {
-				Err(Error::<T>::TimeslotNotAvailable)?
+				Err(Error::<T>::TimeslotNotAvailable.into())
 			}
 		}
 
@@ -413,7 +412,7 @@ pub mod pallet {
 				Self::deposit_event(Event::RefundSuccessful);
 				Ok(())
 			} else {
-				Err(Error::<T>::CancellationNotPossible)?
+				Err(Error::<T>::CancellationNotPossible.into())
 			}
 		}
 
@@ -465,7 +464,6 @@ pub mod pallet {
 						Ok(amount) => {
 							<UpcomingSessions<T>>::remove(&mentor, &student);
 							<PastSessions<T>>::insert(&mentor, &student, session);
-							()
 						},
 					};
 				}
@@ -534,7 +532,7 @@ pub mod pallet {
 
 			T::Currency::transfer(
 				&vault_address,
-				&account,
+				account,
 				amount,
 				ExistenceRequirement::AllowDeath,
 			)?;
