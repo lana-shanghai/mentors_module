@@ -19,11 +19,4 @@ pub trait Vault {
 	type Balance;
 
 	fn account_id(vault_id: u64) -> Self::AccountId;
-
-	// Create a new vault for the mentor and student pair.
-	//fn create_vault(mentor: Self::AccountId, student: Self::AccountId) -> Result<(u64,
-	// VaultDetails<Self::AccountId, Self::Balance>), DispatchError>;
-
-	// Withdraw deposit from the vault.
-	fn withdraw(from: &Self::AccountId, vault_id: u64) -> Result<Self::Balance, DispatchError>;
 }

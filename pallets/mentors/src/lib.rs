@@ -84,7 +84,7 @@ mod tests;
 mod benchmarking;
 
 use frame_support::sp_runtime::{
-	traits::Zero,
+	traits::{CheckedAdd, CheckedSub, Zero},
 	transaction_validity::{InvalidTransaction, TransactionValidity, ValidTransaction},
 };
 
@@ -324,7 +324,7 @@ pub mod pallet {
 			let mut current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
 			if !current_availabilities.contains(&(now + timeslot)) {
 				if let Err(e) = current_availabilities.try_push(now + timeslot) {
-					log::info!("{:?}", e)
+					e
 				};
 				<MentorAvailabilities<T>>::insert(&mentor, current_availabilities)
 			} else {
@@ -337,11 +337,15 @@ pub mod pallet {
 		pub fn remove_availability(origin: OriginFor<T>, timestamp: T::Moment) -> DispatchResult {
 			let mentor = ensure_signed(origin)?;
 			let current_availabilities = <MentorAvailabilities<T>>::get(&mentor);
-			let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
-			<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
-				current_availabilities.remove(index);
-				Ok(())
-			})
+			if let None = current_availabilities.iter().position(|&t| t == timestamp) {
+				Err(DispatchError::Other("FailedToGetIndexOfTimestamp"))
+			} else {
+				let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap();
+				<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
+					current_availabilities.remove(index);
+					Ok(())
+				})
+			}
 		}
 
 		/// Allows a student to book a session with a mentor.
@@ -375,11 +379,16 @@ pub mod pallet {
 				);
 				Self::make_deposit(&mentor, &student)?;
 				Self::deposit_event(Event::DepositSuccessful);
-				let index = current_availabilities.iter().position(|&t| t == timestamp).unwrap(); // TODO fix unwrap call on None
-				<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
-					current_availabilities.remove(index);
-					Ok(())
-				})
+				if let None = current_availabilities.iter().position(|&t| t == timestamp) {
+					Err(DispatchError::Other("FailedToGetIndexOfTimestamp"))
+				} else {
+					let index =
+						current_availabilities.iter().position(|&t| t == timestamp).unwrap();
+					<MentorAvailabilities<T>>::try_mutate(&mentor, |current_availabilities| {
+						current_availabilities.remove(index);
+						Ok(())
+					})
+				}
 			} else {
 				Err(Error::<T>::TimeslotNotAvailable.into())
 			}
@@ -417,6 +426,7 @@ pub mod pallet {
 		}
 
 		// The offchain worker sends a challenge to a new mentor.
+		// TODO: send a URL containing task specification and provide link for submission.
 		#[pallet::weight(10_000 + T::DbWeight::get().reads(1))]
 		pub fn send_challenge(origin: OriginFor<T>, mentor: T::AccountId) -> DispatchResult {
 			ensure_none(origin)?;
@@ -516,7 +526,7 @@ pub mod pallet {
 
 			T::Currency::transfer(student, &vault_address, price, ExistenceRequirement::KeepAlive)?;
 			<MentorStudentVaults<T>>::try_mutate(vault_id, |vault_details| {
-				vault_details.as_mut().unwrap().locked_amount += price;
+				vault_details.as_mut().unwrap().locked_amount.checked_add(&price); // TODO match Some and None
 				Self::deposit_event(Event::TransferSuccessful(price));
 				Ok(price)
 			})
@@ -537,7 +547,7 @@ pub mod pallet {
 				ExistenceRequirement::AllowDeath,
 			)?;
 			<MentorStudentVaults<T>>::try_mutate(vault_id, |vault_details| {
-				vault_details.as_mut().unwrap().locked_amount -= amount;
+				vault_details.as_mut().unwrap().locked_amount.checked_sub(&amount); // TODO match Some and None
 				Self::deposit_event(Event::TransferSuccessful(amount));
 				Ok(amount)
 			})
@@ -558,13 +568,6 @@ pub mod pallet {
 
 		fn account_id(vault_id: u64) -> Self::AccountId {
 			T::PalletId::get().into_sub_account(vault_id)
-		}
-
-		fn withdraw(
-			account: &Self::AccountId,
-			vault_id: u64,
-		) -> Result<Self::Balance, DispatchError> {
-			Self::withdraw_deposit(account, vault_id)
 		}
 	}
 

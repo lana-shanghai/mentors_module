@@ -83,6 +83,7 @@ fn student_cannot_book_unavailable_timeslot() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(2u64).into()));
 		assert_ok!(MentorsModule::process_new_mentors());
+		assert_ok!(MentorsModule::set_session_price(Origin::signed(2u64).into(), 1200));
 		assert_ok!(MentorsModule::add_availability(
 			Origin::signed(2u64).into(),
 			86_400_000 + 100_000
@@ -103,13 +104,38 @@ fn student_cannot_cancel_less_than_24h_upfront() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(2u64).into()));
 		assert_ok!(MentorsModule::process_new_mentors());
+		assert_ok!(MentorsModule::set_session_price(Origin::signed(2u64).into(), 1200));
 		assert_ok!(MentorsModule::add_availability(
 			Origin::signed(2u64).into(),
 			86_400_000 - 100_000
+		));
+		assert_ok!(MentorsModule::book_session(
+			Origin::signed(1u64).into(),
+			2u64,
+			MentorAvailabilities::<Test>::get(2u64)[0]
 		));
 		assert_noop!(
 			MentorsModule::cancel_session(Origin::signed(1u64).into(), 2u64),
 			Error::<Test>::CancellationNotPossible
 		);
+	});
+}
+
+#[test]
+fn student_can_cancel_more_than_24h_upfront() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(MentorsModule::register_as_mentor(Origin::signed(2u64).into()));
+		assert_ok!(MentorsModule::process_new_mentors());
+		assert_ok!(MentorsModule::set_session_price(Origin::signed(2u64).into(), 1200));
+		assert_ok!(MentorsModule::add_availability(
+			Origin::signed(2u64).into(),
+			86_400_000 + 100_000
+		));
+		assert_ok!(MentorsModule::book_session(
+			Origin::signed(1u64).into(),
+			2u64,
+			MentorAvailabilities::<Test>::get(2u64)[0]
+		));
+		assert_ok!(MentorsModule::cancel_session(Origin::signed(1u64).into(), 2u64));
 	});
 }
